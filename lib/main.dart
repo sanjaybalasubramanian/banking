@@ -195,10 +195,10 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
               Rect col4PrintBounds = Rect.fromLTWH(col4Word.bounds.right - customWidth - 0.5, col4Word.bounds.top + 1.5, customWidth, col4Word.bounds.height + 4);
 
               if (normalizedLineText.contains("27/02/26")) {
-                document.pages[i].graphics.drawString("41,023.00", embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: col4PrintBounds, format: rightAlignFormat);
+                document.pages[i].graphics.drawString("40,009.00", embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: col4PrintBounds, format: rightAlignFormat);
                 rowDeltaChange = (40009.0 - originalValue);
               } else {
-                document.pages[i].graphics.drawString("51,160.00", embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: col4PrintBounds, format: rightAlignFormat);
+                document.pages[i].graphics.drawString("50,160.00", embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: col4PrintBounds, format: rightAlignFormat);
                 rowDeltaChange = (50160.0 - originalValue);
               }
 
