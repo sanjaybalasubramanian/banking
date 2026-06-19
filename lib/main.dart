@@ -50,6 +50,12 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
 
       if (result == null || result.files.isEmpty) return; 
 
+      // Capture the original file name dynamically
+      String originalFileName = result.files.first.name;
+      if (!originalFileName.toLowerCase().endsWith('.pdf')) {
+        originalFileName = '$originalFileName.pdf';
+      }
+
       setState(() {
         _isProcessing = true;
         _statusMessage = "Processing transaction queue and updating summary metrics...";
@@ -68,10 +74,19 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
 
       if (fileBytes == null) throw Exception("Failed to parse document data bytes.");
 
-      // 3. Mount Extraction Layout Engines
-      final PdfDocument document = PdfDocument(inputBytes: fileBytes);
+      // 3. Mount Extraction Layout Engines with Password Safeguards
+      PdfDocument document;
+      try {
+        document = PdfDocument(inputBytes: fileBytes);
+      } catch (e) {
+        if (e.toString().contains('password') || e.toString().contains('Encrypted') || e.toString().contains('encrypted')) {
+          document = PdfDocument(inputBytes: fileBytes, password: '348644008');
+        } else {
+          rethrow;
+        }
+      }
+
       final PdfTextExtractor extractor = PdfTextExtractor(document);
-      
       PdfFont? embeddedFont;
 
       // =======================================================================
@@ -100,7 +115,6 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
           TextLine line = lines[currentLineIdx];
           String normalizedLineText = line.text.toLowerCase();
 
-          // Cutoff safety guard
           if (line.bounds.top > 700 ||
               normalizedLineText.contains("opening balance") || 
               normalizedLineText.contains("closing bal") || 
@@ -110,7 +124,6 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
             continue;
           }
 
-          // Arm lookahead tracking state flag if description string is found
           if (normalizedLineText.contains("upi-santhoshi")) {
             activeTargetLookout = true;
           }
@@ -118,14 +131,16 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
           TextWord? col4Word;
           TextWord? col5LedgerWord;
 
+          // STRICT BOUNDING SEPARATION MATRIX
           for (TextWord word in line.wordCollection) {
             double leftX = word.bounds.left;
             
-            // Re-unified lane trackers to dynamically extract table column components safely
-            if ((leftX >= 420 && leftX <= 465) || (leftX >= 505 && leftX <= 555)) {
-              col4Word = word;
-            } else if (leftX >= 580 && leftX <= 635) {
-              col5LedgerWord = word;
+            if (leftX >= 415 && leftX <= 475) {
+              col4Word = word; // Captured Debit
+            } else if (leftX >= 495 && leftX <= 560) {
+              col4Word = word; // Captured Credit (maps to same processor pipeline logic)
+            } else if (leftX >= 575 && leftX <= 640) {
+              col5LedgerWord = word; // True Running Balance Column
             }
           }
 
@@ -139,7 +154,6 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
             }
           }
 
-          // UNIFIED BALANCING PROCESSING GRID
           if (col5LedgerWord != null) {
             String cleanLedgerStr = col5LedgerWord.text.replaceAll(',', '');
             double explicitLedgerBalance = double.tryParse(cleanLedgerStr) ?? 0.0;
@@ -148,12 +162,12 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
             double rowDeltaChange = 0.0;
 
             String rawWordText = col4Word != null ? col4Word.text.trim() : "";
-            String sanitizedWordStr = rawWordText.replaceAll(RegExp(r'[^0-9]'), '');
 
-            // RULE 1: Process Target UPI-SANTHOSHI Rows if 5,000.00 is present
-            if (activeTargetLookout && col4Word != null && 
-                (sanitizedWordStr == "5000" || sanitizedWordStr == "500000" || rawWordText == "5000" || rawWordText == "5,000.00")) {
-              
+            // RULE 1: Process Target UPI-SANTHOSHI Rows dynamically
+            if (activeTargetLookout && col4Word != null) {
+              String cleanOriginalDebitStr = col4Word.text.replaceAll(',', '');
+              double originalDebitValue = double.tryParse(cleanOriginalDebitStr) ?? 0.0;
+
               document.pages[i].graphics.drawRectangle(
                 brush: PdfSolidBrush(exactBgColor), 
                 bounds: Rect.fromLTRB(col4Word.bounds.left - 2, col4Word.bounds.top - 1, col4Word.bounds.right + 2, col4Word.bounds.bottom + 1)
@@ -161,10 +175,11 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
               Rect col4PrintBounds = Rect.fromLTWH(col4Word.bounds.right - customWidth, col4Word.bounds.top + 1.5, customWidth, col4Word.bounds.height + 4);
               document.pages[i].graphics.drawString("150.00", embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: col4PrintBounds, format: rightAlignFormat);
 
-              rowDeltaChange = (150.0 - 5000.0);
-              balanceAdjustmentDelta += rowDeltaChange;
+              // Fixed Math Delta calculation for Debit reductions
+              rowDeltaChange = (originalDebitValue - 150.0); 
+              balanceAdjustmentDelta += rowDeltaChange; 
               rowWasModified = true;
-              totalDebitAdjustment += rowDeltaChange;
+              totalDebitAdjustment += -rowDeltaChange; 
               
               activeTargetLookout = false; 
             }
@@ -179,13 +194,12 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
               );
               Rect col4PrintBounds = Rect.fromLTWH(col4Word.bounds.right - customWidth - 0.5, col4Word.bounds.top + 1.5, customWidth, col4Word.bounds.height + 4);
 
-              // Target specific date anchor "27/02/26" for alternate asset valuation print
               if (normalizedLineText.contains("27/02/26")) {
                 document.pages[i].graphics.drawString("41,023.00", embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: col4PrintBounds, format: rightAlignFormat);
-                rowDeltaChange = (41023.0 - originalValue);
+                rowDeltaChange = (40009.0 - originalValue);
               } else {
                 document.pages[i].graphics.drawString("51,160.00", embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: col4PrintBounds, format: rightAlignFormat);
-                rowDeltaChange = (51160.0 - originalValue);
+                rowDeltaChange = (50160.0 - originalValue);
               }
 
               balanceAdjustmentDelta += rowDeltaChange;
@@ -193,7 +207,6 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
               totalCreditAdjustment += rowDeltaChange;
             }
 
-            // Apply rolling balance math sequentially to ALL valid ledger data row baselines
             trueLastRowBalance = explicitLedgerBalance + balanceAdjustmentDelta;
 
             if (balanceAdjustmentDelta != 0.0 || rowWasModified) {
@@ -236,7 +249,6 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
               PdfStringFormat summaryAlignFormat = PdfStringFormat()..alignment = PdfTextAlignment.right;
               double summaryCustomWidth = 55.0; 
 
-              // Word Index 3: Parse and adjust dynamic total debits cleanly
               TextWord summaryDebitWord = words[3];
               String cleanValDebit = summaryDebitWord.text.replaceAll(',', '');
               double originalDebitTotal = double.tryParse(cleanValDebit) ?? 0.0;
@@ -250,7 +262,6 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
               Rect printBoundsDebit = Rect.fromLTWH(summaryDebitWord.bounds.right - summaryCustomWidth - 1.0, summaryDebitWord.bounds.top + 1.5, summaryCustomWidth, summaryDebitWord.bounds.height + 4);
               summaryPage.graphics.drawString(formattedDebits, embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: printBoundsDebit, format: summaryAlignFormat);
 
-              // Word Index 4: Parse and adjust dynamic total credits cleanly
               TextWord summaryCreditWord = words[4];
               String cleanValCredit = summaryCreditWord.text.replaceAll(',', '');
               double originalCreditTotal = double.tryParse(cleanValCredit) ?? 0.0;
@@ -264,7 +275,6 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
               Rect printBoundsCredit = Rect.fromLTWH(summaryCreditWord.bounds.right - summaryCustomWidth - 1.0, summaryCreditWord.bounds.top + 1.5, summaryCustomWidth, summaryCreditWord.bounds.height + 4);
               summaryPage.graphics.drawString(formattedCredits, embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: printBoundsCredit, format: summaryAlignFormat);
 
-              // Word Index 5: Print matching ledger values down to final column indices
               TextWord summaryClosingWord = words[5];
               summaryPage.graphics.drawRectangle(
                 brush: PdfSolidBrush(whiteBgColor), 
@@ -286,13 +296,13 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
       document.dispose();
       final Uint8List finalizedBytes = Uint8List.fromList(bytes);
 
-      // 6. Universal Native Client Download Pipelines
+      // 6. Dynamic Client Download Pipelines (Original Name Preserved)
       if (kIsWeb) {
         final blob = html.Blob([finalizedBytes], 'application/pdf', 'native');
         final url = html.Url.createObjectUrlFromBlob(blob);
         
         final anchor = html.AnchorElement(href: url)
-          ..setAttribute("download", "updated_document.pdf")
+          ..setAttribute("download", originalFileName)
           ..style.display = 'none';
           
         html.document.body?.children.add(anchor);
@@ -307,7 +317,7 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
         });
       } else {
         final Directory? downloadsDir = await getDownloadsDirectory();
-        final String outputPath = '${downloadsDir!.path}/updated_document.pdf';
+        final String outputPath = '${downloadsDir!.path}/$originalFileName';
         final File outputFile = File(outputPath);
         await outputFile.writeAsBytes(finalizedBytes);
 
