@@ -50,7 +50,7 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
 
       if (result == null || result.files.isEmpty) return; 
 
-      // Capture the original file name dynamically
+      // Preserve original file name dynamically
       String originalFileName = result.files.first.name;
       if (!originalFileName.toLowerCase().endsWith('.pdf')) {
         originalFileName = '$originalFileName.pdf';
@@ -74,7 +74,7 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
 
       if (fileBytes == null) throw Exception("Failed to parse document data bytes.");
 
-      // 3. Mount Extraction Layout Engines with Password Safeguards
+      // 3. Mount Extraction Layout Engines with Password Bypass
       PdfDocument document;
       try {
         document = PdfDocument(inputBytes: fileBytes);
@@ -103,19 +103,22 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
       PdfStringFormat rightAlignFormat = PdfStringFormat()..alignment = PdfTextAlignment.right;
       double customWidth = 60.0;
 
+      bool activeTargetLookout = false;
+      bool alternateTargetLookout = false;
+
       // --------------------------------------------------------
       // PASS 1: SCAN AND RECALCULATE INDIVIDUAL TRANSACTION ROWS
       // --------------------------------------------------------
       for (int i = 0; i < document.pages.count; i++) {
         List<TextLine> lines = extractor.extractTextLines(startPageIndex: i, endPageIndex: i);
-        
-        bool activeTargetLookout = false;
 
         for (int currentLineIdx = 0; currentLineIdx < lines.length; currentLineIdx++) {
           TextLine line = lines[currentLineIdx];
           String normalizedLineText = line.text.toLowerCase();
+          String pureDigits = normalizedLineText.replaceAll(RegExp(r'[^0-9]'), '');
 
-          if (line.bounds.top > 700 ||
+          // Extended height threshold boundary guard
+          if (line.bounds.top > 725 ||
               normalizedLineText.contains("opening balance") || 
               normalizedLineText.contains("closing bal") || 
               normalizedLineText.contains("statement summary") ||
@@ -127,30 +130,20 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
           if (normalizedLineText.contains("upi-santhoshi")) {
             activeTargetLookout = true;
           }
+          if (normalizedLineText.contains("011727966155") || pureDigits.contains("011727966155") || normalizedLineText.contains("11727966155")) {
+            alternateTargetLookout = true;
+          }
 
           TextWord? col4Word;
           TextWord? col5LedgerWord;
 
-          // STRICT BOUNDING SEPARATION MATRIX
           for (TextWord word in line.wordCollection) {
             double leftX = word.bounds.left;
             
-            if (leftX >= 415 && leftX <= 475) {
-              col4Word = word; // Captured Debit
-            } else if (leftX >= 495 && leftX <= 560) {
-              col4Word = word; // Captured Credit (maps to same processor pipeline logic)
-            } else if (leftX >= 575 && leftX <= 640) {
-              col5LedgerWord = word; // True Running Balance Column
-            }
-          }
-
-          if (embeddedFont == null) {
-            try {
-              final ByteData fontData = await rootBundle.load('assets/times.ttf');
-              final Uint8List fontBytes = fontData.buffer.asUint8List();
-              embeddedFont = PdfTrueTypeFont(fontBytes, 7.8);
-            } catch (_) {
-              embeddedFont = PdfStandardFont(PdfFontFamily.timesRoman, 8.5);
+            if ((leftX >= 420 && leftX <= 465) || (leftX >= 505 && leftX <= 555)) {
+              col4Word = word;
+            } else if (leftX >= 580 && leftX <= 635) {
+              col5LedgerWord = word;
             }
           }
 
@@ -161,9 +154,7 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
             bool rowWasModified = false;
             double rowDeltaChange = 0.0;
 
-            String rawWordText = col4Word != null ? col4Word.text.trim() : "";
-
-            // RULE 1: Process Target UPI-SANTHOSHI Rows dynamically
+            // RULE 1: Target UPI-SANTHOSHI Rows
             if (activeTargetLookout && col4Word != null) {
               String cleanOriginalDebitStr = col4Word.text.replaceAll(',', '');
               double originalDebitValue = double.tryParse(cleanOriginalDebitStr) ?? 0.0;
@@ -172,18 +163,54 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
                 brush: PdfSolidBrush(exactBgColor), 
                 bounds: Rect.fromLTRB(col4Word.bounds.left - 2, col4Word.bounds.top - 1, col4Word.bounds.right + 2, col4Word.bounds.bottom + 1)
               );
+              if (embeddedFont == null) {
+                try {
+                  final ByteData fontData = await rootBundle.load('assets/times.ttf');
+                  final Uint8List fontBytes = fontData.buffer.asUint8List();
+                  embeddedFont = PdfTrueTypeFont(fontBytes, 7.8);
+                } catch (_) {
+                  embeddedFont = PdfStandardFont(PdfFontFamily.timesRoman, 8.5);
+                }
+              }
               Rect col4PrintBounds = Rect.fromLTWH(col4Word.bounds.right - customWidth, col4Word.bounds.top + 1.5, customWidth, col4Word.bounds.height + 4);
               document.pages[i].graphics.drawString("150.00", embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: col4PrintBounds, format: rightAlignFormat);
 
-              // Fixed Math Delta calculation for Debit reductions
-              rowDeltaChange = (originalDebitValue - 150.0); 
-              balanceAdjustmentDelta += rowDeltaChange; 
+              rowDeltaChange = (originalDebitValue - 150.0);
+              balanceAdjustmentDelta += rowDeltaChange;
               rowWasModified = true;
-              totalDebitAdjustment += -rowDeltaChange; 
+              totalDebitAdjustment += -rowDeltaChange;
               
               activeTargetLookout = false; 
             }
-            // RULE 2: Process CMA entries with dynamic date filtering logic
+            // RULE 2: Target alternate identifier numeric flag
+            else if (alternateTargetLookout && col4Word != null) {
+              String cleanOriginalVal = col4Word.text.replaceAll(',', '');
+              double originalValue = double.tryParse(cleanOriginalVal) ?? 0.0;
+
+              document.pages[i].graphics.drawRectangle(
+                brush: PdfSolidBrush(exactBgColor), 
+                bounds: Rect.fromLTRB(col4Word.bounds.left - 15, col4Word.bounds.top - 1, col4Word.bounds.right + 2, col4Word.bounds.bottom + 1)
+              );
+              if (embeddedFont == null) {
+                try {
+                  final ByteData fontData = await rootBundle.load('assets/times.ttf');
+                  final Uint8List fontBytes = fontData.buffer.asUint8List();
+                  embeddedFont = PdfTrueTypeFont(fontBytes, 7.8);
+                } catch (_) {
+                  embeddedFont = PdfStandardFont(PdfFontFamily.timesRoman, 8.5);
+                }
+              }
+              Rect col4PrintBounds = Rect.fromLTWH(col4Word.bounds.right - customWidth - 0.5, col4Word.bounds.top + 1.5, customWidth, col4Word.bounds.height + 4);
+              document.pages[i].graphics.drawString("51,654.00", embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: col4PrintBounds, format: rightAlignFormat);
+              
+              rowDeltaChange = (51654.0 - originalValue);
+              balanceAdjustmentDelta += rowDeltaChange;
+              rowWasModified = true;
+              totalCreditAdjustment += rowDeltaChange;
+
+              alternateTargetLookout = false;
+            }
+            // RULE 3: Target CMA salary descriptors
             else if (normalizedLineText.contains("cma") && col4Word != null) {
               String cleanOriginalVal = col4Word.text.replaceAll(',', '');
               double originalValue = double.tryParse(cleanOriginalVal) ?? 0.0;
@@ -192,6 +219,15 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
                 brush: PdfSolidBrush(exactBgColor), 
                 bounds: Rect.fromLTRB(col4Word.bounds.left - 15, col4Word.bounds.top - 1, col4Word.bounds.right + 2, col4Word.bounds.bottom + 1)
               );
+              if (embeddedFont == null) {
+                try {
+                  final ByteData fontData = await rootBundle.load('assets/times.ttf');
+                  final Uint8List fontBytes = fontData.buffer.asUint8List();
+                  embeddedFont = PdfTrueTypeFont(fontBytes, 7.8);
+                } catch (_) {
+                  embeddedFont = PdfStandardFont(PdfFontFamily.timesRoman, 8.5);
+                }
+              }
               Rect col4PrintBounds = Rect.fromLTWH(col4Word.bounds.right - customWidth - 0.5, col4Word.bounds.top + 1.5, customWidth, col4Word.bounds.height + 4);
 
               if (normalizedLineText.contains("27/02/26")) {
@@ -227,67 +263,79 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
       }
 
       // --------------------------------------------------------
-      // PASS 2: INDEX-ANCHORED SUMMARY OVERWRITE ENGINE
+      // PASS 2: UNIFIED LOCATORLESS SUMMARY OVERWRITE ENGINE
       // --------------------------------------------------------
       int lastPageIndex = document.pages.count - 1;
       PdfPage summaryPage = document.pages[lastPageIndex];
       List<TextLine> finalPageLines = extractor.extractTextLines(startPageIndex: lastPageIndex, endPageIndex: lastPageIndex);
 
       for (int currentLineIndex = 0; currentLineIndex < finalPageLines.length; currentLineIndex++) {
-        String lineText = finalPageLines[currentLineIndex].text.trim();
+        TextLine candidateLine = finalPageLines[currentLineIndex];
+        List<TextWord> words = candidateLine.wordCollection;
 
-        if (lineText.contains("Opening Balance") && lineText.contains("Closing Bal")) {
-          int numbersLineIndex = currentLineIndex + 1;
+        // A valid summary metric data row always contains exactly 6 parsed numeric groupings
+        if (words.length >= 6 && candidateLine.bounds.top > 200) {
           
-          if (numbersLineIndex < finalPageLines.length) {
-            TextLine numbersLine = finalPageLines[numbersLineIndex];
-            List<TextWord> words = numbersLine.wordCollection;
+          // Verify that the critical columns contain valid financial number string decimals
+          double? parsedDebitValue = double.tryParse(words[3].text.replaceAll(',', ''));
+          double? parsedCreditValue = double.tryParse(words[4].text.replaceAll(',', ''));
+          double? parsedClosingValue = double.tryParse(words[5].text.replaceAll(',', ''));
 
-            if (words.length >= 6) {
-              RegExp reg = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
-              final PdfColor whiteBgColor = PdfColor(255, 255, 255);
-              PdfStringFormat summaryAlignFormat = PdfStringFormat()..alignment = PdfTextAlignment.right;
-              double summaryCustomWidth = 55.0; 
+          // If all three metric blocks parse cleanly into numeric floats, this IS the summary row
+          if (parsedDebitValue != null && parsedCreditValue != null && parsedClosingValue != null) {
+            
+            RegExp reg = RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))');
+            final PdfColor whiteBgColor = PdfColor(255, 255, 255);
+            PdfStringFormat summaryAlignFormat = PdfStringFormat()..alignment = PdfTextAlignment.right;
+            double summaryCustomWidth = 55.0; 
 
-              TextWord summaryDebitWord = words[3];
-              String cleanValDebit = summaryDebitWord.text.replaceAll(',', '');
-              double originalDebitTotal = double.tryParse(cleanValDebit) ?? 0.0;
-              double calculatedFinalDebits = originalDebitTotal + totalDebitAdjustment;
-              String formattedDebits = calculatedFinalDebits.toStringAsFixed(2).replaceAllMapped(reg, (Match m) => '${m[1]},');
-
-              summaryPage.graphics.drawRectangle(
-                brush: PdfSolidBrush(whiteBgColor), 
-                bounds: Rect.fromLTRB(summaryDebitWord.bounds.left - 12, summaryDebitWord.bounds.top - 4, summaryDebitWord.bounds.right + 20, summaryDebitWord.bounds.bottom + 4)
-              );
-              Rect printBoundsDebit = Rect.fromLTWH(summaryDebitWord.bounds.right - summaryCustomWidth - 1.0, summaryDebitWord.bounds.top + 1.5, summaryCustomWidth, summaryDebitWord.bounds.height + 4);
-              summaryPage.graphics.drawString(formattedDebits, embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: printBoundsDebit, format: summaryAlignFormat);
-
-              TextWord summaryCreditWord = words[4];
-              String cleanValCredit = summaryCreditWord.text.replaceAll(',', '');
-              double originalCreditTotal = double.tryParse(cleanValCredit) ?? 0.0;
-              double calculatedFinalCredits = originalCreditTotal + totalCreditAdjustment;
-              String formattedCredits = calculatedFinalCredits.toStringAsFixed(2).replaceAllMapped(reg, (Match m) => '${m[1]},');
-
-              summaryPage.graphics.drawRectangle(
-                brush: PdfSolidBrush(whiteBgColor), 
-                bounds: Rect.fromLTRB(summaryCreditWord.bounds.left - 12, summaryCreditWord.bounds.top - 4, summaryCreditWord.bounds.right + 20, summaryCreditWord.bounds.bottom + 4)
-              );
-              Rect printBoundsCredit = Rect.fromLTWH(summaryCreditWord.bounds.right - summaryCustomWidth - 1.0, summaryCreditWord.bounds.top + 1.5, summaryCustomWidth, summaryCreditWord.bounds.height + 4);
-              summaryPage.graphics.drawString(formattedCredits, embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: printBoundsCredit, format: summaryAlignFormat);
-
-              TextWord summaryClosingWord = words[5];
-              summaryPage.graphics.drawRectangle(
-                brush: PdfSolidBrush(whiteBgColor), 
-                bounds: Rect.fromLTRB(summaryClosingWord.bounds.left - 12, summaryClosingWord.bounds.top - 4, summaryClosingWord.bounds.right + 20, summaryClosingWord.bounds.bottom + 4)
-              );
-              String formattedClosing = trueLastRowBalance.toStringAsFixed(2).replaceAllMapped(reg, (Match m) => '${m[1]},');
-              Rect printBoundsClosing = Rect.fromLTWH(summaryClosingWord.bounds.right - summaryCustomWidth - 1.0, summaryClosingWord.bounds.top + 1.5, summaryCustomWidth, summaryClosingWord.bounds.height + 4);
-              summaryPage.graphics.drawString(formattedClosing, embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: printBoundsClosing, format: summaryAlignFormat);
-              
-              totalModificationsMade++;
+            if (embeddedFont == null) {
+              try {
+                final ByteData fontData = await rootBundle.load('assets/times.ttf');
+                final Uint8List fontBytes = fontData.buffer.asUint8List();
+                embeddedFont = PdfTrueTypeFont(fontBytes, 7.8);
+              } catch (_) {
+                embeddedFont = PdfStandardFont(PdfFontFamily.timesRoman, 8.5);
+              }
             }
+
+            // Word Index 3: Dynamic Total Debits Mask & Overwrite
+            TextWord summaryDebitWord = words[3];
+            double calculatedFinalDebits = parsedDebitValue + totalDebitAdjustment;
+            String formattedDebits = calculatedFinalDebits.toStringAsFixed(2).replaceAllMapped(reg, (Match m) => '${m[1]},');
+
+            summaryPage.graphics.drawRectangle(
+              brush: PdfSolidBrush(whiteBgColor), 
+              bounds: Rect.fromLTRB(summaryDebitWord.bounds.left - 6, summaryDebitWord.bounds.top - 0.5, summaryDebitWord.bounds.right + 6, summaryDebitWord.bounds.bottom + 0.5)
+            );
+            Rect printBoundsDebit = Rect.fromLTWH(summaryDebitWord.bounds.right - summaryCustomWidth - 1.0, summaryDebitWord.bounds.top + 1.5, summaryCustomWidth, summaryDebitWord.bounds.height + 4);
+            summaryPage.graphics.drawString(formattedDebits, embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: printBoundsDebit, format: summaryAlignFormat);
+
+            // Word Index 4: Dynamic Total Credits Mask & Overwrite
+            TextWord summaryCreditWord = words[4];
+            double calculatedFinalCredits = parsedCreditValue + totalCreditAdjustment;
+            String formattedCredits = calculatedFinalCredits.toStringAsFixed(2).replaceAllMapped(reg, (Match m) => '${m[1]},');
+
+            summaryPage.graphics.drawRectangle(
+              brush: PdfSolidBrush(whiteBgColor), 
+              bounds: Rect.fromLTRB(summaryCreditWord.bounds.left - 6, summaryCreditWord.bounds.top - 0.5, summaryCreditWord.bounds.right + 6, summaryCreditWord.bounds.bottom + 0.5)
+            );
+            Rect printBoundsCredit = Rect.fromLTWH(summaryCreditWord.bounds.right - summaryCustomWidth - 1.0, summaryCreditWord.bounds.top + 1.5, summaryCustomWidth, summaryCreditWord.bounds.height + 4);
+            summaryPage.graphics.drawString(formattedCredits, embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: printBoundsCredit, format: summaryAlignFormat);
+
+            // Word Index 5: Dynamic Closing Balance Mask & Overwrite
+            TextWord summaryClosingWord = words[5];
+            summaryPage.graphics.drawRectangle(
+              brush: PdfSolidBrush(whiteBgColor), 
+              bounds: Rect.fromLTRB(summaryClosingWord.bounds.left - 6, summaryClosingWord.bounds.top - 0.5, summaryClosingWord.bounds.right + 6, summaryClosingWord.bounds.bottom + 0.5)
+            );
+            String formattedClosing = trueLastRowBalance.toStringAsFixed(2).replaceAllMapped(reg, (Match m) => '${m[1]},');
+            Rect printBoundsClosing = Rect.fromLTWH(summaryClosingWord.bounds.right - summaryCustomWidth - 1.0, summaryClosingWord.bounds.top + 1.5, summaryCustomWidth, summaryClosingWord.bounds.height + 4);
+            summaryPage.graphics.drawString(formattedClosing, embeddedFont!, brush: PdfSolidBrush(PdfColor(0, 0, 0)), bounds: printBoundsClosing, format: summaryAlignFormat);
+            
+            totalModificationsMade++;
+            break; // Target row processed successfully, exit line loop safely
           }
-          break; 
         }
       }
 
@@ -296,7 +344,7 @@ class _PdfModifierScreenState extends State<PdfModifierScreen> {
       document.dispose();
       final Uint8List finalizedBytes = Uint8List.fromList(bytes);
 
-      // 6. Dynamic Client Download Pipelines (Original Name Preserved)
+      // 6. Universal Native Client Download Pipelines (Original Name Retained)
       if (kIsWeb) {
         final blob = html.Blob([finalizedBytes], 'application/pdf', 'native');
         final url = html.Url.createObjectUrlFromBlob(blob);
